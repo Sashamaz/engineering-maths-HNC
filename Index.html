@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Engineering Maths Masterclass | L3 Bridging & L4 HNC</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- KaTeX Math Rendering Engine -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+  
+  <style>
+    body {
+      background-color: #0f172a;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .chalkboard {
+      background-color: #090d16;
+      border: 2px solid #334155;
+      box-shadow: inset 0 2px 6px 0 rgba(0, 0, 0, 0.7);
+    }
+    canvas { touch-action: none; }
+    .katex-display {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0.5rem 0;
+      margin: 0.5rem 0 !important;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between">
+
+  <!-- TOP NAVIGATION HEADER -->
+  <header class="bg-slate-900 border-b border-slate-800 p-3 sm:p-4 sticky top-0 z-50 shadow-lg">
+    <div class="max-w-5xl mx-auto flex justify-between items-center gap-2">
+      <div class="flex items-center space-x-2.5 cursor-pointer" onclick="App.showTopicList()">
+        <div class="bg-indigo-600 text-white p-2 rounded-lg font-bold text-lg sm:text-xl shadow">⚡</div>
+        <div>
+          <h1 class="font-bold text-sm sm:text-lg leading-tight text-slate-100">Engineering Maths Masterclass</h1>
+          <p class="text-[11px] sm:text-xs text-indigo-400 font-medium">L3 Bridging (L3E-B1) & L4 HNC Electrical</p>
+        </div>
+      </div>
+      
+      <div class="flex items-center space-x-1.5 sm:space-x-2">
+        <button onclick="FormulasModule.openModal()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 text-xs px-2.5 py-2 rounded-lg font-semibold flex items-center gap-1 transition">
+          <span>📐</span> <span class="hidden md:inline">Formulas</span>
+        </button>
+        <button onclick="UnitsModule.openModal()" class="bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 text-xs px-2.5 py-2 rounded-lg font-semibold flex items-center gap-1 transition">
+          <span>📏</span> <span class="hidden md:inline">Units & Prefixes</span>
+        </button>
+        <div class="bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700 text-xs flex items-center space-x-1">
+          <span class="text-emerald-400 font-bold" id="score-display">0/0</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="max-w-5xl mx-auto w-full p-3 sm:p-6 flex-grow">
+    
+    <!-- DIRECTORY VIEW -->
+    <div id="view-topic-list" class="space-y-6">
+      <div class="bg-slate-800/70 p-5 sm:p-6 rounded-2xl border border-slate-700 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 class="text-xl sm:text-2xl font-extrabold text-white">Curriculum Directory</h2>
+            <p class="text-slate-300 text-xs sm:text-sm mt-1">
+              Structured 4-step lessons with dedicated 10-question practice sets. Progress saves automatically.
+            </p>
+          </div>
+          <button id="resume-btn" onclick="App.resumeSavedTopic()" class="hidden shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow transition">
+            ▶ Resume Last Lesson
+          </button>
+        </div>
+
+        <!-- Level Filter Tabs -->
+        <div class="flex flex-wrap gap-2 pt-2 border-t border-slate-700/80">
+          <button onclick="App.filterCurriculum('all')" id="filter-all" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white">
+            All Modules
+          </button>
+          <button onclick="App.filterCurriculum('L3')" id="filter-L3" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-900 text-blue-400 border border-blue-500/30 hover:bg-slate-700">
+            🔵 Level 3 Bridging (L3E-B1)
+          </button>
+          <button onclick="App.filterCurriculum('L4')" id="filter-L4" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-900 text-purple-400 border border-purple-500/30 hover:bg-slate-700">
+            🟣 Level 4 HNC Electrical
+          </button>
+        </div>
+      </div>
+
+      <div id="modules-container" class="space-y-6"></div>
+    </div>
+
+    <!-- LESSON & PRACTICE VIEW -->
+    <div id="view-lesson" class="hidden space-y-6">
+      <div class="bg-slate-800/90 p-3 rounded-xl border border-slate-700 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
+        <div class="flex items-center gap-2 flex-grow">
+          <button onclick="App.showTopicList()" class="shrink-0 text-slate-300 hover:text-white bg-slate-900 px-3 py-2 rounded-lg border border-slate-700 text-xs font-semibold">
+            ← Modules
+          </button>
+          <select id="quick-topic-select" onchange="App.selectTopicById(this.value, true)" class="bg-slate-900 border border-slate-700 text-xs text-indigo-300 font-semibold rounded-lg px-3 py-2 w-full"></select>
+        </div>
+
+        <div class="flex items-center justify-between md:justify-end gap-2">
+          <div class="flex space-x-1.5">
+            <button id="btn-tab-lesson" onclick="App.switchTab('lesson')" class="px-3.5 py-2 rounded-lg font-bold bg-indigo-600 text-white text-xs transition">
+              📖 4-Step Lesson
+            </button>
+            <button id="btn-tab-practice" onclick="App.switchTab('practice')" class="px-3.5 py-2 rounded-lg font-bold bg-slate-900 text-slate-300 hover:bg-slate-700 border border-slate-700 text-xs transition">
+              ✏️ Practice (10 Qs)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- LESSON CONTAINER -->
+      <div id="lesson-content" class="space-y-6"></div>
+
+      <!-- PRACTICE CONTAINER -->
+      <div id="practice-content" class="hidden space-y-6">
+        <div class="bg-slate-800 p-4 sm:p-6 rounded-2xl border border-slate-700 space-y-5">
+          <div class="flex flex-wrap justify-between items-center gap-2 border-b border-slate-700 pb-3">
+            <div class="flex items-center gap-2">
+              <span id="quiz-level-badge" class="text-[10px] px-2 py-0.5 rounded font-bold uppercase"></span>
+              <span class="text-xs font-bold text-indigo-400 uppercase tracking-wider" id="quiz-step-indicator">Question 1 of 10</span>
+            </div>
+            <span class="text-xs text-slate-400 font-medium" id="quiz-topic-title"></span>
+          </div>
+
+          <div id="quiz-unit-banner" class="bg-amber-950/50 border border-amber-500/40 p-3.5 rounded-xl text-amber-200 text-xs flex items-start gap-2.5">
+            <span class="text-base">💡</span>
+            <div id="quiz-unit-banner-text" class="leading-relaxed"></div>
+          </div>
+
+          <div class="text-base sm:text-lg font-semibold text-slate-100 leading-relaxed bg-slate-900/60 p-4 rounded-xl border border-slate-700/80" id="quiz-question"></div>
+
+          <!-- SCRATCHPAD -->
+          <div class="bg-slate-900 border border-slate-700 rounded-xl p-3 space-y-2.5">
+            <div class="flex flex-wrap justify-between items-center gap-2">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                🎨 Working Canvas <span class="text-[10px] text-slate-400 font-normal">(Wacom / Touch / Mouse)</span>
+              </span>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button onclick="Scratchpad.setTool('pen', '#facc15')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-white" title="Yellow"></button>
+                <button onclick="Scratchpad.setTool('pen', '#38bdf8')" class="w-5 h-5 rounded-full bg-sky-400" title="Cyan"></button>
+                <button onclick="Scratchpad.setTool('pen', '#ffffff')" class="w-5 h-5 rounded-full bg-white" title="White"></button>
+                <button onclick="Scratchpad.setTool('pen', '#4ade80')" class="w-5 h-5 rounded-full bg-emerald-400" title="Green"></button>
+                <button onclick="Scratchpad.setTool('eraser')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 ml-1">🧹 Eraser</button>
+                <button onclick="Scratchpad.extendHeight()" class="text-[11px] bg-indigo-950 hover:bg-indigo-900 text-indigo-300 px-2 py-1 rounded border border-indigo-700/50">+ More Space</button>
+                <button onclick="Scratchpad.clear()" class="text-[11px] bg-red-950/60 hover:bg-red-900/80 text-red-300 px-2 py-1 rounded border border-red-800/50">Clear</button>
+              </div>
+            </div>
+            <div class="w-full max-h-[380px] overflow-y-auto rounded-lg bg-slate-950 border border-slate-800">
+              <canvas id="scratchpad" class="cursor-crosshair w-full block"></canvas>
+            </div>
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2" id="quiz-options"></div>
+          <div id="quiz-explanation" class="hidden p-4 sm:p-5 rounded-xl bg-slate-900 border border-slate-700 space-y-3"></div>
+
+          <div class="flex justify-end pt-2">
+            <button id="quiz-next-btn" onclick="App.nextQuestion()" class="hidden px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm rounded-xl shadow transition">
+              Next Question →
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MODALS SKELETON -->
+  <div id="formulas-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden"></div>
+  <div id="unit-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden"></div>
+
+  <!-- MODULAR JAVASCRIPT FILES -->
+  <script src="storage.js"></script>
+  <script src="units.js"></script>
+  <script src="formula.js"></script>
+  <script src="scratchpad.js"></script>
+  <script src="curriculum.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
