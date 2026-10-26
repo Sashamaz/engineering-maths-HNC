@@ -1,6 +1,7 @@
 /**
  * scratchpad.js - High-Res Canvas Scratchpad
  * Features:
+ * - Dynamic Full-Screen Question HUD with Collapse / Expand toggle
  * - Zero-drift orientation & rotation compensation
  * - Infinite downward scrolling
  * - Mobile & desktop full-screen overlay toggle
@@ -13,9 +14,10 @@ const Scratchpad = (function () {
   let color = '#facc15';
   let height = 300;
   let isFullScreen = false;
+  let isQuestionVisible = true;
   let scrollContainer = null;
 
-  // Inject required full-screen styles automatically
+  // Inject full-screen layout and question banner styling
   function injectStyles() {
     if (document.getElementById('scratchpad-styles')) return;
     const style = document.createElement('style');
@@ -33,7 +35,8 @@ const Scratchpad = (function () {
         display: flex !important;
         flex-direction: column !important;
         background-color: #020617 !important;
-        padding: 12px !important;
+        padding: 10px 12px !important;
+        box-sizing: border-box !important;
       }
       .scratchpad-fullscreen #scratchpad-scroll-wrapper {
         flex: 1 1 0% !important;
@@ -195,7 +198,73 @@ const Scratchpad = (function () {
     ctx.restore();
   }
 
-  // Full-Screen Toggle
+  // =========================================================================
+  // FULL-SCREEN MODE & COLLAPSIBLE QUESTION BANNER
+  // =========================================================================
+  function ensureQuestionBanner(box) {
+    let banner = document.getElementById('scratchpad-fs-question');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'scratchpad-fs-question';
+      banner.className = 'bg-slate-900/95 border border-indigo-500/40 rounded-xl p-3 mb-2 shadow-xl backdrop-blur shrink-0 transition-all';
+      banner.innerHTML = `
+        <div class="flex justify-between items-center gap-2 cursor-pointer select-none" onclick="Scratchpad.toggleQuestion()">
+          <div class="flex items-center gap-2 overflow-hidden">
+            <span class="text-xs font-black text-indigo-400 uppercase tracking-wider shrink-0" id="scratchpad-fs-q-indicator">Question</span>
+            <span class="text-[11px] text-slate-400 truncate" id="scratchpad-fs-q-topic"></span>
+          </div>
+          <button type="button" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded-lg border border-slate-700 flex items-center gap-1.5 font-bold shrink-0 transition">
+            <span id="scratchpad-fs-q-icon">▲</span>
+            <span id="scratchpad-fs-q-btn-text">Hide Question</span>
+          </button>
+        </div>
+        <div id="scratchpad-fs-q-body" class="mt-2 text-xs sm:text-sm font-medium text-slate-100 leading-relaxed border-t border-slate-800 pt-2 overflow-y-auto max-h-36"></div>
+      `;
+      box.insertBefore(banner, box.firstChild);
+    }
+    return banner;
+  }
+
+  function syncQuestionContent() {
+    const qSource = document.getElementById('quiz-question');
+    const stepSource = document.getElementById('quiz-step-indicator');
+    const topicSource = document.getElementById('quiz-topic-title');
+
+    const indTarget = document.getElementById('scratchpad-fs-q-indicator');
+    const topicTarget = document.getElementById('scratchpad-fs-q-topic');
+    const bodyTarget = document.getElementById('scratchpad-fs-q-body');
+
+    if (stepSource && indTarget) indTarget.innerText = stepSource.innerText;
+    if (topicSource && topicTarget) topicTarget.innerText = topicSource.innerText ? `• ${topicSource.innerText}` : '';
+    if (qSource && bodyTarget) {
+      bodyTarget.innerHTML = qSource.innerHTML;
+      if (window.App && typeof window.App.renderMath === 'function') {
+        window.App.renderMath(bodyTarget);
+      }
+    }
+  }
+
+  function toggleQuestion() {
+    isQuestionVisible = !isQuestionVisible;
+    const body = document.getElementById('scratchpad-fs-q-body');
+    const icon = document.getElementById('scratchpad-fs-q-icon');
+    const btnText = document.getElementById('scratchpad-fs-q-btn-text');
+
+    if (!body || !icon || !btnText) return;
+
+    if (isQuestionVisible) {
+      body.classList.remove('hidden');
+      icon.innerText = '▲';
+      btnText.innerText = 'Hide Question';
+    } else {
+      body.classList.add('hidden');
+      icon.innerText = '▼';
+      btnText.innerText = 'Show Question';
+    }
+
+    setTimeout(() => resizeCanvas(height, true), 30);
+  }
+
   function toggleFullScreen() {
     const box = document.getElementById('scratchpad-box');
     const fsBtn = document.getElementById('btn-fullscreen');
@@ -205,6 +274,10 @@ const Scratchpad = (function () {
 
     if (isFullScreen) {
       box.classList.add('scratchpad-fullscreen');
+      const banner = ensureQuestionBanner(box);
+      banner.classList.remove('hidden');
+      syncQuestionContent();
+
       if (fsBtn) {
         fsBtn.innerHTML = '✕ Exit Fullscreen';
         fsBtn.classList.replace('bg-indigo-950', 'bg-red-900');
@@ -212,6 +285,9 @@ const Scratchpad = (function () {
       }
     } else {
       box.classList.remove('scratchpad-fullscreen');
+      const banner = document.getElementById('scratchpad-fs-question');
+      if (banner) banner.classList.add('hidden');
+
       if (fsBtn) {
         fsBtn.innerHTML = '⛶ Fullscreen';
         fsBtn.classList.replace('bg-red-900', 'bg-indigo-950');
@@ -229,6 +305,7 @@ const Scratchpad = (function () {
     setTool,
     extendHeight,
     clear,
-    toggleFullScreen
+    toggleFullScreen,
+    toggleQuestion
   };
 })();
