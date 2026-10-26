@@ -139,10 +139,10 @@
           <div class="text-base sm:text-lg font-semibold text-slate-100 leading-relaxed bg-slate-900/60 p-4 rounded-xl border border-slate-700/80" id="quiz-question"></div>
 
           <!-- SCRATCHPAD -->
-          <div class="bg-slate-900 border border-slate-700 rounded-xl p-3 space-y-2.5">
+          <div id="scratchpad-box" class="bg-slate-900 border border-slate-700 rounded-xl p-3 space-y-2.5 transition-all">
             <div class="flex flex-wrap justify-between items-center gap-2">
               <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                🎨 Working Canvas <span class="text-[10px] text-slate-400 font-normal">(Wacom / Touch / Mouse)</span>
+                🎨 Infinite Canvas <span class="text-[10px] text-slate-400 font-normal">(Wacom / Touch / Mouse)</span>
               </span>
               <div class="flex flex-wrap items-center gap-1.5">
                 <button onclick="Scratchpad.setTool('pen', '#facc15')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-white" title="Yellow"></button>
@@ -150,11 +150,12 @@
                 <button onclick="Scratchpad.setTool('pen', '#ffffff')" class="w-5 h-5 rounded-full bg-white" title="White"></button>
                 <button onclick="Scratchpad.setTool('pen', '#4ade80')" class="w-5 h-5 rounded-full bg-emerald-400" title="Green"></button>
                 <button onclick="Scratchpad.setTool('eraser')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 ml-1">🧹 Eraser</button>
-                <button onclick="Scratchpad.extendHeight()" class="text-[11px] bg-indigo-950 hover:bg-indigo-900 text-indigo-300 px-2 py-1 rounded border border-indigo-700/50">+ More Space</button>
+                <button onclick="Scratchpad.extendHeight(500)" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700">+ Space</button>
+                <button id="btn-fullscreen" onclick="Scratchpad.toggleFullScreen()" class="text-[11px] bg-indigo-950 hover:bg-indigo-900 text-indigo-300 px-2.5 py-1 rounded font-bold border border-indigo-700/60 shadow">⛶ Fullscreen</button>
                 <button onclick="Scratchpad.clear()" class="text-[11px] bg-red-950/60 hover:bg-red-900/80 text-red-300 px-2 py-1 rounded border border-red-800/50">Clear</button>
               </div>
             </div>
-            <div class="w-full max-h-[380px] overflow-y-auto rounded-lg bg-slate-950 border border-slate-800">
+            <div id="scratchpad-scroll-wrapper" class="w-full max-h-[380px] overflow-y-auto rounded-lg bg-slate-950 border border-slate-800">
               <canvas id="scratchpad" class="cursor-crosshair w-full block"></canvas>
             </div>
           </div>
