@@ -1,11 +1,12 @@
 /**
  * scratchpad.js - High-Res Canvas Scratchpad
  * Features:
+ * - Two-finger pinch-to-zoom & spread-to-zoom (50% to 400%)
+ * - Two-finger pan navigation
  * - Dynamic Full-Screen Question HUD with Collapse / Expand toggle
- * - Zero-drift orientation & rotation compensation
+ * - Zero-drift orientation, rotation & zoom coordinate compensation
  * - Infinite downward scrolling
- * - Mobile & desktop full-screen overlay toggle
- * - Active Wacom Stylus, Apple Pencil & Multi-touch support
+ * - Active Wacom Stylus, Apple Pencil & Touch support
  */
 const Scratchpad = (function () {
   let canvas, ctx;
@@ -17,7 +18,21 @@ const Scratchpad = (function () {
   let isQuestionVisible = true;
   let scrollContainer = null;
 
-  // Inject full-screen layout and question banner styling
+  // Zoom & Pan state
+  let zoom = 1.0;
+  let panX = 0;
+  let panY = 0;
+  const MIN_ZOOM = 0.5;
+  const MAX_ZOOM = 4.0;
+
+  // Multi-touch tracking
+  const activePointers = new Map();
+  let lastPinchDist = 0;
+  let lastPinchCenter = { x: 0, y: 0 };
+  let strokeBackup = null;
+  let strokeStartTime = 0;
+
+  // Inject full-screen layout, touch-action and zoom styling
   function injectStyles() {
     if (document.getElementById('scratchpad-styles')) return;
     const style = document.createElement('style');
@@ -43,8 +58,39 @@ const Scratchpad = (function () {
         max-height: none !important;
         height: 100% !important;
       }
+      #scratchpad-scroll-wrapper {
+        touch-action: none !important;
+        overflow: hidden !important;
+        position: relative !important;
+      }
+      #scratchpad {
+        transform-origin: 0 0;
+        touch-action: none !important;
+        will-change: transform;
+      }
     `;
     document.head.appendChild(style);
+  }
+
+  function ensureZoomButton() {
+    if (document.getElementById('btn-zoom-reset')) return;
+    const toolbar = document.querySelector('#scratchpad-box .flex-wrap.items-center');
+    if (!toolbar) return;
+
+    const zoomBtn = document.createElement('button');
+    zoomBtn.id = 'btn-zoom-reset';
+    zoomBtn.type = 'button';
+    zoomBtn.title = 'Tap to reset zoom to 100%';
+    zoomBtn.className = 'text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono px-2 py-1 rounded border border-slate-700 transition';
+    zoomBtn.innerText = '100%';
+    zoomBtn.onclick = resetZoom;
+
+    const fsBtn = document.getElementById('btn-fullscreen');
+    if (fsBtn) {
+      toolbar.insertBefore(zoomBtn, fsBtn);
+    } else {
+      toolbar.appendChild(zoomBtn);
+    }
   }
 
   function init(resetHeight = false) {
@@ -54,9 +100,16 @@ const Scratchpad = (function () {
 
     scrollContainer = document.getElementById('scratchpad-scroll-wrapper') || canvas.parentElement;
 
-    if (resetHeight) height = isFullScreen ? window.innerHeight * 1.5 : 300;
+    if (resetHeight) {
+      height = isFullScreen ? window.innerHeight * 1.5 : 300;
+      zoom = 1.0;
+      panX = 0;
+      panY = 0;
+    }
 
+    ensureZoomButton();
     resizeCanvas(height, !resetHeight);
+    applyTransform();
     setupEvents();
   }
 
@@ -64,7 +117,9 @@ const Scratchpad = (function () {
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    const cssWidth = rect.width || (canvas.parentElement ? canvas.parentElement.clientWidth : 650);
+    const cssWidth = (scrollContainer && scrollContainer.clientWidth > 0) 
+      ? scrollContainer.clientWidth 
+      : (rect.width || 650);
 
     let backup = null;
     if (preserveContent && canvas.width > 0 && canvas.height > 0) {
@@ -88,11 +143,35 @@ const Scratchpad = (function () {
     applySettings();
   }
 
+  function applyTransform() {
+    if (!canvas) return;
+    canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+
+    const zoomBtn = document.getElementById('btn-zoom-reset');
+    if (zoomBtn) {
+      zoomBtn.innerText = `${Math.round(zoom * 100)}%`;
+      if (Math.abs(zoom - 1.0) > 0.05 || Math.abs(panX) > 4 || Math.abs(panY) > 4) {
+        zoomBtn.classList.add('text-amber-300', 'border-amber-500/50', 'bg-slate-900');
+        zoomBtn.classList.remove('text-slate-300', 'border-slate-700', 'bg-slate-800');
+      } else {
+        zoomBtn.classList.remove('text-amber-300', 'border-amber-500/50', 'bg-slate-900');
+        zoomBtn.classList.add('text-slate-300', 'border-slate-700', 'bg-slate-800');
+      }
+    }
+  }
+
+  function resetZoom() {
+    zoom = 1.0;
+    panX = 0;
+    panY = 0;
+    applyTransform();
+  }
+
   function setupEvents() {
     if (canvas._hasEvents) return;
     canvas._hasEvents = true;
 
-    // Mathematically exact position ratio to eliminate orientation/rotation drift
+    // Mathematically exact position ratio compensating for device DPI, CSS zoom & Pan
     const getPos = (e) => {
       const r = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -106,43 +185,135 @@ const Scratchpad = (function () {
 
     canvas.onpointerdown = (e) => {
       e.preventDefault();
-      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
-      isDrawing = true;
-      applySettings();
-      const p = getPos(e);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      checkInfiniteExpansion(p.y);
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+
+      if (activePointers.size === 1) {
+        // Single pointer: prepare to draw
+        if (canvas.setPointerCapture) {
+          try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+
+        // Backup canvas in case second finger joins for a pinch gesture
+        if (!strokeBackup) {
+          strokeBackup = document.createElement('canvas');
+        }
+        strokeBackup.width = canvas.width;
+        strokeBackup.height = canvas.height;
+        strokeBackup.getContext('2d').drawImage(canvas, 0, 0);
+        strokeStartTime = Date.now();
+
+        isDrawing = true;
+        applySettings();
+        const p = getPos(e);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        checkInfiniteExpansion(p.y);
+
+      } else if (activePointers.size >= 2) {
+        // Two fingers detected: abort drawing & clear accidental stray tap mark
+        isDrawing = false;
+        if (strokeBackup && (Date.now() - strokeStartTime < 250)) {
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(strokeBackup, 0, 0);
+          ctx.restore();
+          applySettings();
+        }
+
+        const pts = Array.from(activePointers.values());
+        lastPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        lastPinchCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      }
     };
 
     canvas.onpointermove = (e) => {
-      if (!isDrawing) return;
-      e.preventDefault();
-      const p = getPos(e);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      checkInfiniteExpansion(p.y);
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+
+      if (activePointers.size >= 2) {
+        // Multi-touch active: execute pinch-to-zoom and two-finger pan
+        const pts = Array.from(activePointers.values());
+        const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        const currentCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+
+        if (lastPinchDist > 0 && currentDist > 0) {
+          const factor = currentDist / lastPinchDist;
+          const newZoom = Math.min(Math.max(MIN_ZOOM, zoom * factor), MAX_ZOOM);
+
+          // Zoom centered around touch midpoint
+          const containerRect = scrollContainer ? scrollContainer.getBoundingClientRect() : { left: 0, top: 0 };
+          const focalX = currentCenter.x - containerRect.left;
+          const focalY = currentCenter.y - containerRect.top;
+
+          panX = focalX - (focalX - panX) * (newZoom / zoom) + (currentCenter.x - lastPinchCenter.x);
+          panY = focalY - (focalY - panY) * (newZoom / zoom) + (currentCenter.y - lastPinchCenter.y);
+          zoom = newZoom;
+
+          applyTransform();
+          lastPinchDist = currentDist;
+          lastPinchCenter = currentCenter;
+        }
+
+      } else if (activePointers.size === 1 && isDrawing) {
+        // Single pointer active: draw line
+        e.preventDefault();
+        const p = getPos(e);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        checkInfiniteExpansion(p.y);
+      }
     };
 
     const stop = (e) => {
-      if (!isDrawing) return;
-      isDrawing = false;
-      if (e && canvas.releasePointerCapture && e.pointerId !== undefined) {
-        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (e && e.pointerId !== undefined) {
+        activePointers.delete(e.pointerId);
+        if (canvas.releasePointerCapture) {
+          try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        }
+      }
+
+      if (activePointers.size < 2) {
+        lastPinchDist = 0;
+      }
+      if (activePointers.size === 0) {
+        isDrawing = false;
       }
     };
 
     canvas.onpointerup = stop;
     canvas.onpointercancel = stop;
 
-    // Infinite scroll listener: auto-adds space when scrolling down
+    // Desktop/Trackpad pinch-to-zoom (Wheel + Ctrl/Meta)
     if (scrollContainer) {
-      scrollContainer.addEventListener('scroll', () => {
-        if (scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 150) {
-          extendHeight(600);
+      scrollContainer.addEventListener('wheel', (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
+          const newZoom = Math.min(Math.max(MIN_ZOOM, zoom * zoomFactor), MAX_ZOOM);
+
+          const containerRect = scrollContainer.getBoundingClientRect();
+          const focalX = e.clientX - containerRect.left;
+          const focalY = e.clientY - containerRect.top;
+
+          panX = focalX - (focalX - panX) * (newZoom / zoom);
+          panY = focalY - (focalY - panY) * (newZoom / zoom);
+          zoom = newZoom;
+
+          applyTransform();
+        } else if (e.shiftKey) {
+          // Shift + Wheel pan horizontally
+          panX -= e.deltaY;
+          applyTransform();
         }
-      });
+      }, { passive: false });
     }
+
+    // Suppress native iOS Safari gesture zoom overrides
+    const preventGesture = (e) => e.preventDefault();
+    canvas.addEventListener('gesturestart', preventGesture);
+    canvas.addEventListener('gesturechange', preventGesture);
+    canvas.addEventListener('gestureend', preventGesture);
 
     // Screen Rotation & Window Resize compensation
     let resizeTimer;
@@ -151,6 +322,7 @@ const Scratchpad = (function () {
       resizeTimer = setTimeout(() => {
         if (canvas && canvas.offsetParent !== null) {
           resizeCanvas(height, true);
+          applyTransform();
         }
       }, 150);
     };
@@ -196,6 +368,7 @@ const Scratchpad = (function () {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
+    applySettings();
   }
 
   // =========================================================================
@@ -262,7 +435,10 @@ const Scratchpad = (function () {
       btnText.innerText = 'Show Question';
     }
 
-    setTimeout(() => resizeCanvas(height, true), 30);
+    setTimeout(() => {
+      resizeCanvas(height, true);
+      applyTransform();
+    }, 30);
   }
 
   function toggleFullScreen() {
@@ -297,6 +473,7 @@ const Scratchpad = (function () {
 
     setTimeout(() => {
       resizeCanvas(height, true);
+      applyTransform();
     }, 50);
   }
 
@@ -306,6 +483,7 @@ const Scratchpad = (function () {
     extendHeight,
     clear,
     toggleFullScreen,
-    toggleQuestion
+    toggleQuestion,
+    resetZoom
   };
 })();
