@@ -1,17 +1,18 @@
 /**
  * scratchpad.js - High-Res Canvas Scratchpad
  * Features:
- * - Native two-finger pinch-to-zoom & pan (50% to 400%)
- * - Visible toolbar zoom controls ([-] 100% [+])
- * - Hardware multi-touch detection (impossible to draw lines between 2 fingers)
- * - Dynamic Full-Screen Question HUD with Collapse / Expand toggle
- * - Zero-drift orientation, rotation & zoom coordinate compensation
+ * - Unified Pointer Events engine (Mouse, Wacom Stylus, Apple Pencil & Touch)
+ * - Two-finger pinch-to-zoom (50% to 400%) & two-finger pan
+ * - Anti-stray-mark suppression on two-finger contact
+ * - Mathematically exact coordinate mapping at any zoom level or orientation
+ * - Manual toolbar zoom controls ([−] 100% [+])
  * - Infinite downward scrolling
+ * - Full-screen overlay with collapsible question HUD
  */
 const Scratchpad = (function () {
   let canvas, ctx;
   let isDrawing = false;
-  let isTouchActive = false;
+  let isPinching = false;
   let tool = 'pen';
   let color = '#facc15';
   let height = 300;
@@ -26,11 +27,15 @@ const Scratchpad = (function () {
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 4.0;
 
-  // Pinch tracking
-  let lastPinchDist = 0;
-  let lastPinchCenter = { x: 0, y: 0 };
-  let strokeBackup = null;
-  let strokeStartTime = 0;
+  // Multi-touch tracking
+  const activePointers = new Map();
+  let initialPinchDist = 0;
+  let initialPinchCenter = { x: 0, y: 0 };
+  let initialZoom = 1.0;
+  let initialPanX = 0;
+  let initialPanY = 0;
+  let strokeSnapshot = null;
+  let strokeStartedAt = 0;
 
   function injectStyles() {
     if (document.getElementById('scratchpad-styles')) return;
@@ -129,6 +134,7 @@ const Scratchpad = (function () {
     }
 
     height = Math.max(newHeight, isFullScreen ? window.innerHeight : 300);
+    canvas.style.width = cssWidth + 'px';
     canvas.style.height = height + 'px';
     canvas.width = Math.floor(cssWidth * dpr);
     canvas.height = Math.floor(height * dpr);
@@ -174,162 +180,139 @@ const Scratchpad = (function () {
     if (canvas._hasEvents) return;
     canvas._hasEvents = true;
 
-    // Mathematically exact coordinate calculation compensating for zoom, pan, and DPI
-    const getPos = (touchOrPointer) => {
-      const r = canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const scaleX = (canvas.width / dpr) / (r.width || 1);
-      const scaleY = (canvas.height / dpr) / (r.height || 1);
+    // Direct mathematical coordinate translation via container anchor
+    const getPos = (e) => {
+      const rect = scrollContainer.getBoundingClientRect();
       return {
-        x: (touchOrPointer.clientX - r.left) * scaleX,
-        y: (touchOrPointer.clientY - r.top) * scaleY
+        x: (e.clientX - rect.left - panX) / zoom,
+        y: (e.clientY - rect.top - panY) / zoom
       };
     };
 
-    const getTouchDist = (touches) => {
-      return Math.hypot(
-        touches[0].clientX - touches[1].clientX,
-        touches[0].clientY - touches[1].clientY
-      );
-    };
+    // POINTER DOWN: Register finger / stylus / mouse
+    canvas.onpointerdown = (e) => {
+      e.preventDefault();
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+      activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
-    const getTouchCenter = (touches) => {
-      return {
-        x: (touches[0].clientX + touches[1].clientX) / 2,
-        y: (touches[0].clientY + touches[1].clientY) / 2
-      };
-    };
-
-    // =========================================================================
-    // NATIVE TOUCH EVENTS (Guarantees zero lines when 2 fingers touch)
-    // =========================================================================
-    canvas.addEventListener('touchstart', (e) => {
-      isTouchActive = true;
-
-      if (e.touches.length === 1) {
-        // EXACTLY 1 FINGER: Start drawing
+      if (activePointers.size === 1) {
+        // Single pointer: initialize drawing path
+        isPinching = false;
         isDrawing = true;
 
-        if (!strokeBackup) strokeBackup = document.createElement('canvas');
-        strokeBackup.width = canvas.width;
-        strokeBackup.height = canvas.height;
-        strokeBackup.getContext('2d').drawImage(canvas, 0, 0);
-        strokeStartTime = Date.now();
+        // Take snapshot in case a second finger joins for a pinch
+        if (!strokeSnapshot) strokeSnapshot = document.createElement('canvas');
+        strokeSnapshot.width = canvas.width;
+        strokeSnapshot.height = canvas.height;
+        strokeSnapshot.getContext('2d').drawImage(canvas, 0, 0);
+        strokeStartedAt = Date.now();
 
         applySettings();
-        const p = getPos(e.touches[0]);
+        const p = getPos(e);
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + 0.1, p.y + 0.1);
+        ctx.stroke();
 
-      } else if (e.touches.length >= 2) {
-        // 2 OR MORE FINGERS: CANCEL DRAWING IMMEDIATELY
+      } else if (activePointers.size >= 2) {
+        // Two fingers detected: CANCEL DRAWING & INITIALIZE PINCH/PAN
         isDrawing = false;
+        isPinching = true;
 
-        // Erase any small stray dot drawn during the first 250ms of the gesture
-        if (strokeBackup && (Date.now() - strokeStartTime < 250)) {
+        // Revert any accidental dot drawn during the first 250ms of touch
+        if (strokeSnapshot && (Date.now() - strokeStartedAt < 250)) {
           ctx.save();
           ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(strokeBackup, 0, 0);
+          ctx.drawImage(strokeSnapshot, 0, 0);
           ctx.restore();
           applySettings();
         }
 
-        lastPinchDist = getTouchDist(e.touches);
-        lastPinchCenter = getTouchCenter(e.touches);
+        const pts = Array.from(activePointers.values());
+        initialPinchDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+        initialPinchCenter = {
+          x: (pts[0].clientX + pts[1].clientX) / 2,
+          y: (pts[0].clientY + pts[1].clientY) / 2
+        };
+        initialZoom = zoom;
+        initialPanX = panX;
+        initialPanY = panY;
       }
-    }, { passive: false });
+    };
 
-    canvas.addEventListener('touchmove', (e) => {
-      e.preventDefault();
+    // POINTER MOVE: Draw or Pinch/Pan
+    canvas.onpointermove = (e) => {
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
-      if (e.touches.length >= 2) {
-        // STRICT PINCH & PAN — NEVER DRAW
-        isDrawing = false;
-        const currentDist = getTouchDist(e.touches);
-        const currentCenter = getTouchCenter(e.touches);
+      if (isPinching && activePointers.size >= 2) {
+        // TWO-FINGER PINCH-TO-ZOOM & PAN (NO DRAWING)
+        const pts = Array.from(activePointers.values());
+        const currentDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+        const currentCenter = {
+          x: (pts[0].clientX + pts[1].clientX) / 2,
+          y: (pts[0].clientY + pts[1].clientY) / 2
+        };
 
-        if (lastPinchDist > 0 && currentDist > 0) {
-          const factor = currentDist / lastPinchDist;
-          const newZoom = Math.min(Math.max(MIN_ZOOM, zoom * factor), MAX_ZOOM);
+        if (initialPinchDist > 0 && currentDist > 0) {
+          const rect = scrollContainer.getBoundingClientRect();
+          const scaleFactor = currentDist / initialPinchDist;
+          const newZoom = Math.min(Math.max(MIN_ZOOM, initialZoom * scaleFactor), MAX_ZOOM);
 
-          const containerRect = scrollContainer ? scrollContainer.getBoundingClientRect() : { left: 0, top: 0 };
-          const focalX = currentCenter.x - containerRect.left;
-          const focalY = currentCenter.y - containerRect.top;
+          const originX = initialPinchCenter.x - rect.left;
+          const originY = initialPinchCenter.y - rect.top;
+          const currentOriginX = currentCenter.x - rect.left;
+          const currentOriginY = currentCenter.y - rect.top;
 
-          panX = focalX - (focalX - panX) * (newZoom / zoom) + (currentCenter.x - lastPinchCenter.x);
-          panY = focalY - (focalY - panY) * (newZoom / zoom) + (currentCenter.y - lastPinchCenter.y);
+          panX = currentOriginX - ((originX - initialPanX) / initialZoom) * newZoom;
+          panY = currentOriginY - ((originY - initialPanY) / initialZoom) * newZoom;
           zoom = newZoom;
 
           applyTransform();
-          lastPinchDist = currentDist;
-          lastPinchCenter = currentCenter;
         }
 
-      } else if (e.touches.length === 1 && isDrawing) {
-        // STRICT 1-FINGER DRAWING
-        const p = getPos(e.touches[0]);
+      } else if (isDrawing && activePointers.size === 1 && !isPinching) {
+        // SINGLE-POINTER DRAWING
+        e.preventDefault();
+        const p = getPos(e);
         ctx.lineTo(p.x, p.y);
         ctx.stroke();
         checkInfiniteExpansion(p.y);
       }
-    }, { passive: false });
+    };
 
-    const endTouch = (e) => {
-      if (e.touches.length === 0) {
+    // POINTER UP / CANCEL
+    const stop = (e) => {
+      if (e && e.pointerId !== undefined) {
+        activePointers.delete(e.pointerId);
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+
+      if (activePointers.size === 0) {
         isDrawing = false;
-        lastPinchDist = 0;
-        setTimeout(() => { isTouchActive = false; }, 80);
-      } else if (e.touches.length === 1) {
-        // Prevent drawing when lifting only 1 finger from a pinch
+        isPinching = false;
+        initialPinchDist = 0;
+        strokeSnapshot = null;
+      } else if (activePointers.size === 1) {
+        // Prevent accidental drawing when lifting one finger from a pinch
         isDrawing = false;
-        lastPinchDist = 0;
       }
     };
 
-    canvas.addEventListener('touchend', endTouch);
-    canvas.addEventListener('touchcancel', endTouch);
+    canvas.onpointerup = stop;
+    canvas.onpointercancel = stop;
 
-    // =========================================================================
-    // MOUSE & WACOM STYLUS EVENTS (Desktop / PC)
-    // =========================================================================
-    canvas.addEventListener('pointerdown', (e) => {
-      if (isTouchActive || e.pointerType === 'touch') return;
-      e.preventDefault();
-      isDrawing = true;
-      applySettings();
-      const p = getPos(e);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-    });
-
-    canvas.addEventListener('pointermove', (e) => {
-      if (isTouchActive || e.pointerType === 'touch') return;
-      if (!isDrawing) return;
-      e.preventDefault();
-      const p = getPos(e);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      checkInfiniteExpansion(p.y);
-    });
-
-    const stopPointer = (e) => {
-      if (isTouchActive || (e && e.pointerType === 'touch')) return;
-      isDrawing = false;
-    };
-    canvas.addEventListener('pointerup', stopPointer);
-    canvas.addEventListener('pointercancel', stopPointer);
-
-    // Trackpad / Mouse Wheel Zoom
+    // Desktop/Trackpad pinch-to-zoom (Wheel + Ctrl)
     if (scrollContainer) {
       scrollContainer.addEventListener('wheel', (e) => {
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
           const factor = e.deltaY < 0 ? 1.08 : 0.92;
           const newZoom = Math.min(Math.max(MIN_ZOOM, zoom * factor), MAX_ZOOM);
-          const containerRect = scrollContainer.getBoundingClientRect();
-          const focalX = e.clientX - containerRect.left;
-          const focalY = e.clientY - containerRect.top;
+          const rect = scrollContainer.getBoundingClientRect();
+          const focalX = e.clientX - rect.left;
+          const focalY = e.clientY - rect.top;
 
           panX = focalX - (focalX - panX) * (newZoom / zoom);
           panY = focalY - (focalY - panY) * (newZoom / zoom);
@@ -339,7 +322,7 @@ const Scratchpad = (function () {
       }, { passive: false });
     }
 
-    // Window Resize / Orientation
+    // Screen rotation & window resizing
     let resizeTimer;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimer);
